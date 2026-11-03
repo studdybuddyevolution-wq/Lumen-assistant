@@ -1095,6 +1095,11 @@ class JarvisLive:
         memory     = load_memory()
         mem_str    = format_memory_for_prompt(memory)
         sys_prompt = _load_system_prompt()
+        try:
+            from selfdev import build_prompt_context as _build_selfdev_context
+            sys_prompt += _build_selfdev_context()
+        except Exception as _selfdev_exc:
+            print(f"[SelfDev] Learned context unavailable: {_selfdev_exc}")
 
         now      = datetime.now()
         time_str = now.strftime("%A, %B %d, %Y — %I:%M %p")
