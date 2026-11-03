@@ -1,0 +1,43 @@
+﻿.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+node_modules/
+dist/
+build/
+.DS_Store
+
+# Sensitive files
+**/api_keys.json
+**/long_term.json
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build files
+node_modules/
+dist/
+build/
+
+# Windows
+*.lnk
+Thumbs.db
+.DS_Store
+
+# Secrets and private data
+**/api_keys.json
+**/long_term.json
+**/.env
+**/.env.*
+**/*.lnk
+
+/Mark-LVI-main/
