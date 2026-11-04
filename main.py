@@ -1100,6 +1100,11 @@ class JarvisLive:
             sys_prompt += _build_selfdev_context()
         except Exception as _selfdev_exc:
             print(f"[SelfDev] Learned context unavailable: {_selfdev_exc}")
+        try:
+            from memory.vault_manager import build_prompt_context as _build_vault_context
+            sys_prompt += _build_vault_context()
+        except Exception as _vault_exc:
+            print(f"[Vault] Startup context unavailable: {_vault_exc}")
 
         now      = datetime.now()
         time_str = now.strftime("%A, %B %d, %Y — %I:%M %p")

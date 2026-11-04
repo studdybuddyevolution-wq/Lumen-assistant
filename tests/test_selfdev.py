@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from selfdev.learning import add_rule, build_prompt_context, list_rules, set_rule_active
-from selfdev.skills import list_skills, save_skill, set_skill_active
+from selfdev.skills import list_skills, save_skill, set_skill_active, view_skill
 from selfdev import repair
 
 
@@ -36,11 +36,21 @@ class SelfDevelopmentTests(unittest.TestCase):
         self.assertTrue(set_rule_active(result["rule"]["id"], False)["success"])
         self.assertEqual(list_rules(active_only=True), [])
 
+    def test_skill_learning_protocol_prioritizes_research_practice_and_approval(self):
+        context = build_prompt_context()
+        self.assertIn("SKILL LEARNING PROTOCOL", context)
+        self.assertIn("free_research", context)
+        self.assertIn("practise a small", context.lower())
+        self.assertIn("Wait for explicit approval", context)
+
     def test_skill_is_instruction_only_and_can_be_disabled(self):
         result = save_skill("Release checklist", "Prepare a release", "Check tests, notes, and rollback steps.")
         self.assertTrue(result["success"])
-        self.assertIn("Release checklist", build_prompt_context())
+        context = build_prompt_context()
+        self.assertIn("Release checklist", context)
+        self.assertNotIn("Check tests, notes, and rollback steps.", context)
         slug = list_skills(active_only=True)[0]["slug"]
+        self.assertIn("Check tests, notes, and rollback steps.", view_skill(slug)["skill"]["instructions"])
         self.assertTrue(set_skill_active(slug, False)["success"])
         self.assertEqual(list_skills(active_only=True), [])
 

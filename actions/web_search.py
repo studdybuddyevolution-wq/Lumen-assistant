@@ -377,6 +377,11 @@ def web_search(
             found = _research(query)
         elif mode == "price":
             found = _price(query)
+        elif mode in ("free_search", "free_research"):
+            # Skill research must be able to gather sources without consuming
+            # Gemini grounding quota or making a second paid model call.
+            count = 12 if mode == "free_research" else 6
+            found = _format_ddg(query, _ddg_search(query, max_results=count))
         else:
             found = _search(query)
 
@@ -402,7 +407,7 @@ def web_search(
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "web_search",
-    "description": "Searches the web. Use for ANY question about current facts, events, prices, or topics — always prefer this over guessing. Modes: 'search' (default), 'news' (latest headlines on a topic), 'research' (deep comprehensive answer), 'price' (product cost lookup), 'compare' (side-by-side comparison of items).",
+    "description": "Searches the web. Use for ANY question about current facts, events, prices, or topics — always prefer this over guessing. Modes: 'search' (default, may use Gemini grounding), 'free_search' (DuckDuckGo only, no model/API call), 'free_research' (up to 12 DuckDuckGo source results, no model/API call), 'news', 'research', 'price', 'compare'. Use free_search/free_research for skill research to avoid extra model calls.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
@@ -412,7 +417,7 @@ TOOL = {
             },
             "mode": {
                 "type": "STRING",
-                "description": "search | news | research | price | compare"
+                "description": "search | free_search | free_research | news | research | price | compare"
             },
             "items": {
                 "type": "ARRAY",
