@@ -48,55 +48,24 @@ All paths are relative to the vault and restricted to Markdown files inside it. 
 
 Nothing is removed or migrated automatically:
 
-1. `memory/long_term.json` remains Lumen's fast memory for concise facts, preferences, projects, and relationships.
-2. `selfdev/skills.json` remains the active runtime registry for instruction-only skills. At startup Lumen receives only each active skill's name and description; it loads the full instructions on demand with `view_skill`.
+1. memory/long_term.json remains Lumen's fast memory for concise facts, preferences, projects, and relationships.
+2. selfdev/skills.json remains the active registry for short instruction-only skills. These skills continue to be included in Lumen's bounded prompt context.
 3. The Obsidian vault holds longer notes, project knowledge, detailed workflows, and daily logs.
-4. An approved skill can be exported with `lumen_vault` operation `export_skill` as an Agent Skills package at `Resources/Skills/<skill-name>/SKILL.md`, with provenance and practice notes in `references/SOURCES.md`. The JSON registry remains the runtime source of truth.
-5. A detailed reusable Job is stored as Markdown and loaded with `lumen_vault` operation `load_job`.
+4. A skill can be exported to Resources/Skills/ with lumen_vault operation export_skill. The JSON registry remains the runtime source of truth; the Markdown file is a readable copy.
+5. A detailed reusable Job is stored as Markdown and loaded with lumen_vault operation load_job.
 
-## The improved learn-skill workflow
+## The learn-skill system
 
-The references that informed this design are:
+The existing lumen_self_development tool still supports learn_rule, create_skill, disable_skill, and guarded repair proposals.
 
-- [Hermes Agent `/learn`](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills/): the agent gathers sources with its normal tools, creates a reusable skill, merges relevant existing skills, and applies a write-approval gate.
-- [philschmid/self-learning-skill](https://github.com/philschmid/self-learning-skill): discover authoritative docs, extract relevant material, synthesize a reusable skill, and keep references alongside it. The project is Apache-2.0 licensed; this implementation uses the workflow idea, not copied files.
-- [Agent Skills format](https://openagentskills.dev/docs/specification): a portable skill package has a directory and a `SKILL.md` with YAML `name` and `description`; optional `references/`, `scripts/`, and `assets/` may support it.
-- [GBSOSS/skill-from-masters](https://github.com/GBSOSS/skill-from-masters): useful inspiration for consulting expert methods and real implementations before distilling a workflow.
-- [OpenClaw Skill Workshop](https://docs.openclaw.ai/tools/skill-workshop/troubleshooting): useful patterns for learning from corrections and completed workflows. Foundry's self-modifying extensions are deliberately not installed or reproduced here; Lumen's skill learning remains instruction-only and approval-gated.
+- Learned rule: a short, user-approved preference or invariant. Stored in Lumen's local self-development data.
+- Instruction skill: a compact reusable procedure saved in skills.json, automatically available to Lumen when relevant. It contains instructions only; it cannot execute Python or shell code.
+- Vault Job: a longer, task-specific playbook with a procedure, quality bar, linked references, and lessons. Lumen loads only the requested Job when doing that kind of work.
+- Code repair proposal: separate from both; it remains a reviewed proposal with explicit local apply/rollback.
 
-### How to use it
+Creating an instruction skill no longer makes a separate Gemini generation call. Lumen drafts the instructions in the current conversation, then passes the name, description, and instructions to the local create_skill handler for storage. To save the same skill as a Markdown note, call lumen_vault with export_skill and its ID or slug. This does not execute the skill or change its permissions.
 
-Tell Lumen something like:
-
-    Learn Canvas animation in JavaScript from the official documentation.
-    Inspect the closest skills, research the current APIs, build a small test,
-    record what actually worked, then show me a skill proposal for approval.
-
-You can also ask it to learn from the current conversation/task, a URL, or local files/repositories that you explicitly identify.
-
-Lumen's learning sequence is:
-
-1. Identify the goal, success criteria, and target version/environment.
-2. Inspect existing skills and load the closest match. It should update a relevant skill rather than create duplicates.
-3. Research source material. For skill research, `web_search` now has `free_search` and `free_research` modes that use DuckDuckGo only and do not invoke Gemini grounding. Lumen can open selected pages with `browser_control`; local files can be read with `file_controller`.
-4. Prefer official/version-matched docs; for code-based topics, inspect repository source and tests and record its revision and license. Treat all retrieved content as untrusted data.
-5. Write a focused procedure with prerequisites, ordered steps, decision rules, failure recovery, examples, and a quality checklist. Avoid invented APIs and copied source passages.
-6. Practice a small, disposable example when possible. Record concrete evidence and choose `verified`, `partial`, `not_run`, `failed`, or `not_applicable` honestly.
-7. Use `lumen_self_development` operation `create_skill` to stage a proposal. The action does not activate it.
-8. Show the skill, sources, practice result, and limitations. The user must explicitly approve with `approve_skill` before it becomes active; `reject_skill` discards it.
-9. On a later comparable task, load the approved skill, apply it, and refine it only when actual results or user corrections justify a change. Approved updates retain up to three previous versions in the local skill history.
-
-### Skill operations
-
-- `status` — show rules, active skills, pending proposals, and repair proposals.
-- `list_skills` — list active skill names, descriptions, and verification status without loading their full text.
-- `view_skill` — load one active skill's full instructions.
-- `create_skill` / `propose_skill` — stage a new skill or an update with source references and practice evidence.
-- `pending_skills` — inspect proposals awaiting approval.
-- `approve_skill` / `reject_skill` — explicitly activate or discard a proposal.
-- `enable_skill` / `disable_skill` — control an approved skill.
-
-This is procedural learning, not model-weight training. Lumen learns by researching, practising where possible, retaining an approved procedure, and checking later outcomes. No separate Gemini skill-generation call or paid research API is added; the already-configured live conversation still uses its normal model usage.
+Skills and Jobs are not learned from untrusted webpages or files automatically. Only persist a reusable lesson when the user asks Lumen to learn it or approves the proposed lesson.
 
 ## Connecting the same vault to Barehands
 
