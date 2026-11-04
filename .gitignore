@@ -41,3 +41,6 @@ Thumbs.db
 **/*.lnk
 
 /Mark-LVI-main/
+
+# Optional separate Barehands checkout (upstream AGPL project)
+/integrations/barehands/
