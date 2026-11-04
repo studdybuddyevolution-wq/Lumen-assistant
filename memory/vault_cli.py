@@ -1,4 +1,4 @@
-"""Initialize or inspect Lumen's local Obsidian vault.
+r"""Initialize or inspect Lumen's local Obsidian vault.
 
 Examples:
     python -m memory.vault_cli init
