@@ -11,10 +11,14 @@ permissions:
 
 jobs:
   focused-tests:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: \${{ matrix.os }}
     timeout-minutes: 10
     steps:
-      - name: Check out merged master
+      - name: Check out merged master plus the CLI fix
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -23,15 +27,7 @@ jobs:
           python-version: "3.11"
 
       - name: Compile changed learning and vault modules
-        run: |
-          python -m compileall -q \
-            actions/self_development.py \
-            actions/vault_memory.py \
-            actions/web_search.py \
-            memory/vault_cli.py \
-            memory/vault_manager.py \
-            selfdev/learning.py \
-            selfdev/skills.py
+        run: python -m compileall -q actions/self_development.py actions/vault_memory.py actions/web_search.py memory/vault_cli.py memory/vault_manager.py selfdev/learning.py selfdev/skills.py
 
       - name: Test self-development and progressive skill loading
         run: python -m unittest discover -s tests -p "test_selfdev.py" -v
