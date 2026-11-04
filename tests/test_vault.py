@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from memory import vault_manager as vault
+from selfdev.skills import save_skill
 
 
 class VaultManagerTests(unittest.TestCase):
@@ -104,6 +105,27 @@ class VaultManagerTests(unittest.TestCase):
         self.assertLessEqual(len(context), 502)
         with patch.dict(os.environ, {"LUMEN_VAULT_AUTO_CONTEXT": "0"}):
             self.assertEqual(vault.build_prompt_context(), "")
+
+    def test_export_skill_creates_agent_skills_package_and_sources(self):
+        vault.initialize_vault()
+        data_dir = self.root.parent / "lumen-data"
+        with patch.dict(os.environ, {"XDG_DATA_HOME": str(data_dir), "LOCALAPPDATA": str(data_dir)}):
+            saved = save_skill(
+                "Canvas Animation",
+                "Build small Canvas animations using documented APIs.",
+                "Create a canvas, animate with requestAnimationFrame, and inspect the result.",
+                sources=["https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API"],
+                practice_status="partial",
+                practice_notes="Static review only; browser runtime check not run.",
+            )
+            exported = vault.export_instruction_skill(saved["skill"]["id"])
+        self.assertTrue(exported["success"])
+        skill_path = self.root / "Resources" / "Skills" / "canvas-animation" / "SKILL.md"
+        sources_path = self.root / "Resources" / "Skills" / "canvas-animation" / "references" / "SOURCES.md"
+        self.assertTrue(skill_path.is_file())
+        self.assertTrue(sources_path.is_file())
+        self.assertIn("name: canvas-animation", skill_path.read_text(encoding="utf-8"))
+        self.assertIn("developer.mozilla.org", sources_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
