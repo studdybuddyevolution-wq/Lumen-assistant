@@ -15,6 +15,7 @@ Important distinction: Lumen's existing Gemini Live conversation engine is separ
 From the Lumen repository root (`C:\Mark-LVI-main`):
 
 ```powershell
+New-Item -ItemType Directory -Force integrations | Out-Null
 git clone https://github.com/jaredrhod/barehands.git integrations\barehands
 ```
 
