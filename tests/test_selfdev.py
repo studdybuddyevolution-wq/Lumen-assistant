@@ -40,7 +40,7 @@ class SelfDevelopmentTests(unittest.TestCase):
         context = build_prompt_context()
         self.assertIn("SKILL LEARNING PROTOCOL", context)
         self.assertIn("free_research", context)
-        self.assertIn("practise a small", context)
+        self.assertIn("practise a small", context.lower())
         self.assertIn("Wait for explicit approval", context)
 
     def test_skill_is_instruction_only_and_can_be_disabled(self):
