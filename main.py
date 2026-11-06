@@ -1038,6 +1038,11 @@ class JarvisLive:
     def _on_text_command(self, text: str):
         if not self._loop:
             return
+        # Preserve the existing sleep gate: changing engines is still a
+        # conversation command, not a way to bypass wake-word sleep.
+        if self._wake_enabled and not self._awake:
+            self.ui.write_log("SYS: I'm asleep — say 'Hey Jarvis' or tap WAKE NOW first.")
+            return
         target = parse_engine_switch(text)
         if target is not None:
             asyncio.run_coroutine_threadsafe(
@@ -1046,12 +1051,6 @@ class JarvisLive:
             )
             return
         if not self.session:
-            return
-        # Respect wake-word sleep: a typed command must not be answered while
-        # asleep either (the sleep gate is not just for the mic). Wake first with
-        # "Hey Jarvis" or the WAKE NOW button.
-        if self._wake_enabled and not self._awake:
-            self.ui.write_log("SYS: I'm asleep — say 'Hey Jarvis' or tap WAKE NOW first.")
             return
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
@@ -2435,7 +2434,7 @@ class JarvisLive:
     async def _open_session(self, live_model: str, config):
         """Open the selected engine behind the shared Live-shaped interface."""
         mode = self._engine_mode()
-        if mode == "gemini":
+        if self._engine_caps is None:
             client = genai.Client(
                 api_key=_get_api_key(),
                 http_options={"api_version":
@@ -2537,6 +2536,13 @@ class JarvisLive:
 
                 # Resolve capabilities BEFORE building the prompt/tool declarations.
                 self._engine_caps = self._resolve_engine_caps()
+                if _mode == "pipeline" and self._engine_caps is None:
+                    # Preserve the historical fallback for a broken custom
+                    # pipeline. The dedicated Lumen Local mode never takes this
+                    # path; it waits for repair instead of opening Gemini.
+                    LIVE_MODEL = _gemini.live_model()
+                    live_model = LIVE_MODEL
+                    print(f"[JARVIS] Custom pipeline unavailable — using {live_model}")
                 if isinstance(self._engine_caps, dict) and self._engine_caps.get("_local_unavailable"):
                     _reason = str(self._engine_caps["_local_unavailable"])
                     self.ui.write_log(
