@@ -101,8 +101,9 @@ _LOCAL_BUDGET = {"max_tools": "14", "max_tool_chars": "12000"}
 
 CATALOG = (
     {"id": "ollama",     "label": "Ollama",
-     "note": "on this computer · free", "local": True,
-     "values": {"base_url": PRESETS["Ollama"], **_LOCAL_BUDGET}},
+     "note": "on this computer · free · Qwen3.5 4B default", "local": True,
+     "values": {"base_url": PRESETS["Ollama"], "model": "qwen3.5:4b",
+                **_LOCAL_BUDGET}},
     {"id": "lmstudio",   "label": "LM Studio",
      "note": "on this computer · free", "local": True,
      "values": {"base_url": PRESETS["LM Studio"], **_LOCAL_BUDGET}},
