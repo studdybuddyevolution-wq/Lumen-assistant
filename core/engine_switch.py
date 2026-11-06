@@ -60,6 +60,18 @@ def validate_local_pipeline(registry, pipeline: dict, get_provider_config) -> No
                 "Choose an entry marked 'on this computer'."
             )
 
+        if slot == "llm" and cfg.get("base_url"):
+            from providers.llm_openai import _is_own_hardware
+            if not _is_own_hardware(str(cfg.get("base_url") or "")):
+                raise ValueError(
+                    "The selected language-model address is not a local/private "
+                    "network address. Choose Ollama or another local server."
+                )
+        if slot == "stt" and str(cfg.get("backend") or "local").strip().lower() != "local":
+            raise ValueError(
+                "Speech recognition is configured for a hosted API, not local Whisper."
+            )
+
         # Probes are intentionally side-effect-light. The LLM probe checks
         # reachability and model availability without running the vision probe;
         # Whisper checks its local package; system TTS checks the local voice.
