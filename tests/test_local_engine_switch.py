@@ -52,7 +52,7 @@ class LocalEngineValidationTests(unittest.TestCase):
             },
         }
         self.configs = {
-            "ollama": {"catalog": "ollama", "configured": True},
+            "ollama": {"catalog": "ollama", "configured": True, "base_url": "http://127.0.0.1:11434/v1"},
             "whisper": {"catalog": "local", "configured": True},
             "piper": {"catalog": "piper", "configured": True},
             "cloud_tts": {"catalog": "hosted", "configured": True},
@@ -87,6 +87,16 @@ class LocalEngineValidationTests(unittest.TestCase):
     def test_rejects_local_provider_that_fails_its_readiness_probe(self):
         self.declarations["whisper"]["instance"] = FakeProvider((False, "package missing"))
         with self.assertRaisesRegex(ValueError, "not ready: package missing"):
+            self.validate({"llm": "ollama", "stt": "whisper", "tts": "piper"})
+
+    def test_rejects_hosted_llm_url_even_when_catalog_says_local(self):
+        self.configs["ollama"]["base_url"] = "https://api.openai.com/v1"
+        with self.assertRaisesRegex(ValueError, "not a local/private"):
+            self.validate({"llm": "ollama", "stt": "whisper", "tts": "piper"})
+
+    def test_rejects_hosted_transcription_backend(self):
+        self.configs["whisper"]["backend"] = "api"
+        with self.assertRaisesRegex(ValueError, "hosted API"):
             self.validate({"llm": "ollama", "stt": "whisper", "tts": "piper"})
 
 
