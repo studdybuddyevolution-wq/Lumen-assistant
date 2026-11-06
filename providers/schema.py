@@ -80,6 +80,7 @@ _LIVE_ONLY = ("behavior", "scheduling")
 # the first draft of this list said "set_reminder" and the tool is called
 # "reminder", which would have quietly demoted it to an extra.
 CORE_TOOLS: tuple[str, ...] = (
+    "switch_engine_mode",
     "open_app",
     "computer_settings",
     "computer_control",
