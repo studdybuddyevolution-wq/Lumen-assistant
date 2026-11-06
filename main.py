@@ -1413,7 +1413,9 @@ class JarvisLive:
                     if target == "local":
                         from core.engine_switch import validate_local_pipeline
                         pipe = get_pipeline()
-                        validate_local_pipeline(registry, pipe, get_provider_config)
+                        await asyncio.to_thread(
+                            validate_local_pipeline, registry, pipe, get_provider_config
+                        )
 
                         already_full_local = (
                             current_mode == "pipeline"
