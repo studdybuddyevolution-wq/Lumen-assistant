@@ -457,8 +457,14 @@ def _close_app(app_name: str, confirmed_index: int | None = None) -> str:
 
 
 def _screen_find(description: str) -> tuple[int, int] | None:
-    api_key = _get_api_key()
-    if not api_key:
+    # Gemini mode still requires its configured key. Lumen Local deliberately
+    # has no Gemini key, and routes this image prompt through local Qwen instead.
+    try:
+        from memory.config_manager import get_provider_mode
+        local_mode = get_provider_mode() == "local"
+    except Exception:
+        local_mode = False
+    if not local_mode and not _get_api_key():
         print("[ComputerControl] ⚠️ No API key for screen_find")
         return None
 

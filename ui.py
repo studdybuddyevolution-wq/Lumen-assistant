@@ -2761,12 +2761,19 @@ class ProvidersOverlay(_HudOverlay):
             "gemini")
         self._card_local = self._mode_card(
             "🖥  MY OWN SETUP",
-            "Your choice of hearing, thinking and speaking. Can run entirely on "
-            "this computer, with nothing leaving it. Slower: 1.5 to 4 seconds.",
+            "Choose your own speech recogniser, language model and voice. "
+            "Keep this for custom combinations.",
             "pipeline")
         cards.addWidget(self._card_gemini)
         cards.addWidget(self._card_local)
         outer.addLayout(cards)
+
+        self._card_qwen = self._mode_card(
+            "◈  LUMEN LOCAL · QWEN 3.5 4B",
+            "Ready-made private setup: local Whisper, Ollama Qwen 3.5 4B, "
+            "and Piper speech. No Gemini model calls while this mode is active.",
+            "local")
+        outer.addWidget(self._card_qwen)
 
         # ── Body ────────────────────────────────────────────────────────────
         self._scroll = QScrollArea()
@@ -2845,7 +2852,7 @@ class ProvidersOverlay(_HudOverlay):
         return b
 
     def _refresh_cards(self) -> None:
-        for card in (self._card_gemini, self._card_local):
+        for card in (self._card_gemini, self._card_local, self._card_qwen):
             on = card.property("modeValue") == self._mode
             card.setChecked(on)
             card.setStyleSheet(f"""
@@ -3105,6 +3112,33 @@ class ProvidersOverlay(_HudOverlay):
         if self._mode == "pipeline":
             for slot, num, name, what in self._SLOTS:
                 self._body_lay.addWidget(self._slot_box(slot, num, name, what))
+        elif self._mode == "local":
+            w, lay = self._box([])
+            lay.addWidget(self._label(
+                "Lumen's ready-made local conversation engine uses:",
+                8, C.PRI, bold=True))
+            lay.addWidget(self._label(
+                "① HEARING  ·  faster-whisper / Whisper base on your CPU",
+                8, C.TEXT_DIM))
+            lay.addWidget(self._label(
+                "② THINKING  ·  Ollama at 127.0.0.1:11434 with qwen3.5:4b",
+                8, C.TEXT_DIM))
+            lay.addWidget(self._label(
+                "③ SPEAKING  ·  Piper voice en_US-lessac-medium",
+                8, C.TEXT_DIM))
+            lay.addWidget(self._label(
+                "Install once: ollama pull qwen3.5:4b",
+                8, C.TEXT_MED))
+            lay.addWidget(self._label(
+                "Then install the optional local audio packages: "
+                "python -m pip install faster-whisper piper-tts",
+                8, C.TEXT_MED))
+            lay.addWidget(self._label(
+                "The first run downloads the Whisper model and Piper voice. "
+                "Conversation text and speech stay on this computer. "
+                "Your custom pipeline and Gemini settings are preserved.",
+                8, C.TEXT_DIM))
+            self._body_lay.addWidget(w)
         else:
             w, lay = self._box([])
             lay.addWidget(self._label(
@@ -3112,11 +3146,12 @@ class ProvidersOverlay(_HudOverlay):
                 "speech over one connection, with the transcript and every tool "
                 "call on the same wire.", 8, C.TEXT_DIM))
             lay.addWidget(self._label(
-                "Pick MY OWN SETUP above to run it on your own machine, or "
-                "through another company's model.", 7, C.TEXT_DIM))
+                "Pick MY OWN SETUP to use a custom local or hosted combination, "
+                "or LUMEN LOCAL for the ready-made Qwen profile.", 7, C.TEXT_DIM))
             self._body_lay.addWidget(w)
 
-        self._body_lay.addWidget(self._sidecar_box_widget())
+        if self._mode != "local":
+            self._body_lay.addWidget(self._sidecar_box_widget())
         self._body_lay.addStretch(1)
         self._update_footer()
 
@@ -3424,7 +3459,12 @@ class ProvidersOverlay(_HudOverlay):
         QTimer.singleShot(0, self._rebuild_body)
 
     def _update_footer(self) -> None:
-        if self._mode != "pipeline":
+        if self._mode == "local":
+            self._footer.setText(
+                "Local profile. Requires Ollama + qwen3.5:4b, faster-whisper and piper-tts. "
+                "SAVE & APPLY validates and reconnects; no Gemini fallback.")
+            return
+        if self._mode == "gemini":
             self._footer.setText(
                 "Gemini Live. Nothing on this panel changes the conversation.")
             return
@@ -3625,7 +3665,9 @@ class ProvidersOverlay(_HudOverlay):
         self.hide()
         # Background-request settings take effect on the next call with no
         # reconnect. Only the conversation engine needs the session rebuilt.
-        if before != after:
+        if before != after or self._mode == "local":
+            # Re-applying Local is also the explicit retry action after the
+            # user installs Ollama / faster-whisper / Piper while Lumen is open.
             self.changed.emit()
 
 

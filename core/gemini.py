@@ -628,14 +628,15 @@ def _to_openai_messages(contents, config) -> tuple[list[dict], Optional[float]]:
     return messages, temperature
 
 
-def _provider_call(model: str, contents, config, timeout_ms: int):
+def _provider_call(model: str, contents, config, timeout_ms: int,
+                   provider_config: dict | None = None):
     """One generation through a configured provider. Raises like every other
     rung, so the loop's error classification applies to it unchanged."""
     from memory.config_manager import get_provider_config
     from providers import registry
 
     pid = model[len(PROVIDER_PREFIX):]
-    cfg = get_provider_config(pid)
+    cfg = dict(provider_config) if provider_config is not None else get_provider_config(pid)
     missing = registry.missing_fields(pid, cfg)
     if missing:
         raise RuntimeError(f"404 not configured: {', '.join(missing)}")
@@ -666,6 +667,29 @@ def call(contents, tier: str = FAST, config=None,
     # is tried first, with the reasoning ladder behind it. So a user's choice is
     # honoured, and a user's choice that is having an outage still degrades to
     # something that answers instead of to nothing.
+    # Local conversation mode also keeps one-shot model-assisted work local.
+    # Do not quietly use the configured Gemini key as a fallback. Grounded
+    # Gemini search is unavailable from this text endpoint, so it fails closed.
+    try:
+        from memory.config_manager import get_provider_mode
+        _local_only = get_provider_mode() == "local"
+    except Exception:
+        _local_only = False
+    if _local_only:
+        if tier == SEARCH:
+            print("[Local] grounded Gemini search is unavailable in Lumen Local mode")
+            return None
+        try:
+            from providers.local_profile import get_llm_config
+            return _provider_call(
+                PROVIDER_PREFIX + "openai_compat",
+                contents, config, timeout_ms,
+                provider_config=get_llm_config(),
+            )
+        except Exception as e:
+            print(f"[Local] Qwen side call failed; no Gemini fallback: {type(e).__name__}: {e}")
+            return None
+
     ladder = _LADDERS.get(tier)
     if ladder is None:
         ladder = (tier,) + tuple(m for m in _LADDERS[SMART] if m != tier)
