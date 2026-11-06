@@ -383,6 +383,29 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "switch_engine_mode",
+        "description": (
+            "Switch the WHOLE conversation engine, not just the chat model. "
+            "Call with mode=local when the user asks to switch to local, offline, "
+            "private, or on-device mode. This switches speech recognition, the "
+            "language model, and speech synthesis together, disables cloud sidecar "
+            "calls, and reconnects the session. Local mode is allowed only when all "
+            "three selected providers are explicitly marked local and configured. "
+            "Call with mode=gemini only when the user asks to switch back to Gemini."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "mode": {
+                    "type": "STRING",
+                    "enum": ["local", "gemini"],
+                    "description": "local = fully on-device STT + LLM + TTS; gemini = Gemini Live"
+                }
+            },
+            "required": ["mode"]
+        }
+    },
+    {
         "name": "screen_process",
         "description": (
             "Captures the screen or webcam image and lets you analyze it. "
@@ -599,6 +622,7 @@ class JarvisLive:
         # Set only when a local pipeline is running, so push-to-talk can tell it
         # the turn is over. Live decides that on the server; nothing does here.
         self._engine               = None
+        self._pending_engine_switch = False
         # Deadline for "we sent a turn and the server has said nothing since".
         # None means nothing is outstanding. Armed by the send sites, cleared by
         # the first frame of ANY response, watched by _watch_stall().
@@ -1374,6 +1398,63 @@ class JarvisLive:
                 r = await loop.run_in_executor(None, get_system_status)
                 result = str(r)
 
+            elif name == "switch_engine_mode":
+                target = str(args.get("mode", "local")).strip().lower()
+                if target not in ("local", "gemini"):
+                    result = "Choose either local or gemini mode."
+                else:
+                    from memory.config_manager import (
+                        get_provider_mode, get_pipeline, get_provider_config,
+                        get_local_only, get_sidecar_provider, save_providers,
+                    )
+                    from providers import registry
+
+                    current_mode = get_provider_mode()
+                    if target == "local":
+                        from core.engine_switch import validate_local_pipeline
+                        pipe = get_pipeline()
+                        await asyncio.to_thread(
+                            validate_local_pipeline, registry, pipe, get_provider_config
+                        )
+
+                        already_full_local = (
+                            current_mode == "pipeline"
+                            and get_local_only()
+                            and not get_sidecar_provider()
+                        )
+                        if already_full_local:
+                            result = "The full local engine is already active."
+                        else:
+                            save_providers(
+                                mode="pipeline",
+                                sidecar="",
+                                sidecar_first=False,
+                                local_only=True,
+                            )
+                            registry.reset()
+                            self._pending_engine_switch = True
+                            self.ui.write_log(
+                                "SYS: Full local mode selected — local speech recognition, "
+                                "local language model and local speech output. Cloud sidecar "
+                                "and Gemini fallback are disabled; reconnecting."
+                            )
+                            result = (
+                                "Switching the complete conversation to the configured "
+                                "local STT, LLM and TTS now. Cloud sidecar calls and Gemini "
+                                "fallback are disabled."
+                            )
+                    else:
+                        if current_mode == "gemini" and not get_local_only():
+                            result = "Gemini Live is already active."
+                        else:
+                            save_providers(mode="gemini", local_only=False)
+                            registry.reset()
+                            self._pending_engine_switch = True
+                            self.ui.write_log(
+                                "SYS: Switching the conversation back to Gemini Live."
+                            )
+                            result = "Switching the complete conversation back to Gemini Live."
+
             elif name == "manage_monitor":
                 action = args.get("action", "").lower().strip()
                 topic  = args.get("topic", "").strip()
@@ -1747,6 +1828,18 @@ class JarvisLive:
                                     }))
                             out_buf = []
 
+                            # Wait for the engine to finish its spoken
+                            # acknowledgement of the switch tool result.
+                            # This point is reached on the FOLLOW-UP turn_end,
+                            # not the turn_complete bundled with the tool call.
+                            if self._pending_engine_switch:
+                                self._pending_engine_switch = False
+                                self.request_reconnect(
+                                    keep_context=False,
+                                    reason="conversation engine switch",
+                                )
+                                return
+
                             if self._vision_close_pending:
                                 # This turn_complete IS the vision answer — close camera + release busy flag
                                 self._vision_close_pending = False
@@ -1765,6 +1858,8 @@ class JarvisLive:
                         await self.session.send_tool_response(
                             function_responses=fn_responses
                         )
+                        # The follow-up answer is allowed to finish. The
+                        # reconnect happens at the next turn_complete above.
                         await self._flush_pending_vision()
         except Exception as e:
             print(f"[JARVIS] ❌ Recv: {e}")
@@ -2254,10 +2349,23 @@ class JarvisLive:
         if self._engine_mode() != "pipeline":
             return None
         try:
-            from memory.config_manager import get_pipeline, get_provider_config
+            from memory.config_manager import (
+                get_pipeline, get_provider_config, get_local_only,
+                get_sidecar_provider,
+            )
             from providers import registry
 
             pipe = get_pipeline()
+            if get_local_only():
+                from core.engine_switch import validate_local_pipeline
+                validate_local_pipeline(
+                    registry, pipe, get_provider_config, probe=False
+                )
+                if get_sidecar_provider():
+                    raise RuntimeError(
+                        "local-only mode cannot have a cloud model sidecar"
+                    )
+
             llm_id = str(pipe.get("llm") or "").strip()
             if not llm_id:
                 raise RuntimeError("no language model is chosen")
@@ -2289,9 +2397,20 @@ class JarvisLive:
             caps["audio_out"] = bool(str(pipe.get("tts") or "").strip())
             return caps
         except Exception as e:
-            # A local engine that will not start must never mean no assistant.
-            # Falling back to Live is the whole reason the ladder exists, and
-            # the reason is said out loud rather than left in a console.
+            # The voice command "switch to local" means local-only, not
+            # "try local and quietly send the conversation to Gemini if it
+            # fails". Keep the failure visible and closed until the user fixes
+            # the local provider configuration or explicitly switches back.
+            from memory.config_manager import get_local_only
+            if get_local_only():
+                message = f"Local-only engine could not start: {e}"
+                self.ui.write_log(f"SYS: {message}. Cloud fallback is disabled.")
+                print(f"[JARVIS] {message}")
+                raise RuntimeError(message) from e
+
+            # The settings panel ordinary pipeline mode retains its previous
+            # safety net: if local was not explicitly locked, Gemini remains
+            # available as a fallback.
             self.ui.write_log(f"SYS: local engine unavailable ({e}) — "
                               f"using Gemini Live.")
             print(f"[JARVIS] Pipeline engine unavailable: {e}")
@@ -2558,7 +2677,7 @@ class JarvisLive:
                 # difference between "JARVIS is quieter today" and "JARVIS does
                 # not start today": one model means one daily limit, and the
                 # limit always arrives mid-conversation.
-                if _gemini.note_live_failure(live_model, err_str):
+                if self._engine_mode() != "pipeline" and _gemini.note_live_failure(live_model, err_str):
                     nxt = _gemini.live_model()
                     self.ui.write_log(
                         f"SYS: Switching to {nxt.split('/')[-1]} — the previous "

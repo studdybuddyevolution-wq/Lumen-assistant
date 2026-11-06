@@ -410,6 +410,11 @@ def get_provider_mode() -> str:
         else PROVIDER_MODE_GEMINI
 
 
+def get_local_only() -> bool:
+    """True when a voice-commanded switch explicitly forbids cloud fallback."""
+    return bool(get_providers().get("local_only", False))
+
+
 def get_provider_config(provider_id: str) -> dict:
     """Stored settings for one provider — address, model, key, limits."""
     creds = get_providers().get("creds")
@@ -441,14 +446,20 @@ def get_sidecar_provider() -> str:
 def _patch_providers(**fields) -> None:
     p = get_providers()
     p.update(fields)
+    if p.get("local_only"):
+        # Local-only is a privacy boundary, not just a UI preference. A later
+        # sidecar setting must not quietly send model requests to a hosted API.
+        p["sidecar"] = ""
+        p["sidecar_first"] = False
     _patch_config(providers=p)
 
 
 def save_provider_mode(mode: str) -> None:
     mode = (mode or "").strip().lower()
-    _patch_providers(mode=mode if mode in (PROVIDER_MODE_GEMINI,
-                                           PROVIDER_MODE_PIPELINE)
-                     else PROVIDER_MODE_GEMINI)
+    selected = mode if mode in (PROVIDER_MODE_GEMINI,
+                                  PROVIDER_MODE_PIPELINE) else PROVIDER_MODE_GEMINI
+    _patch_providers(mode=selected,
+                     **({"local_only": False} if selected == PROVIDER_MODE_GEMINI else {}))
 
 
 def save_provider_config(provider_id: str, values: dict) -> None:
@@ -499,7 +510,8 @@ def save_sidecar_first(enabled: bool) -> None:
 
 
 def save_providers(mode: str = None, pipeline: dict = None, creds: dict = None,
-                   sidecar: str = None, sidecar_first: bool = None) -> None:
+                   sidecar: str = None, sidecar_first: bool = None,
+                   local_only: bool = None) -> None:
     """Write the whole providers block in ONE file write.
 
     The settings panel used to call five setters in a row — one per provider's
@@ -529,6 +541,10 @@ def save_providers(mode: str = None, pipeline: dict = None, creds: dict = None,
         m = str(mode).strip().lower()
         block["mode"] = m if m in (PROVIDER_MODE_GEMINI,
                                    PROVIDER_MODE_PIPELINE) else PROVIDER_MODE_GEMINI
+        if block["mode"] == PROVIDER_MODE_GEMINI:
+            block["local_only"] = False
+    if local_only is not None:
+        block["local_only"] = bool(local_only)
     if pipeline is not None:
         current = block.get("pipeline")
         current = dict(current) if isinstance(current, dict) else {}
@@ -547,6 +563,11 @@ def save_providers(mode: str = None, pipeline: dict = None, creds: dict = None,
         block["sidecar"] = str(sidecar or "").strip()
     if sidecar_first is not None:
         block["sidecar_first"] = bool(sidecar_first)
+
+    if block.get("local_only"):
+        # The complete local engine never uses a remote model sidecar.
+        block["sidecar"] = ""
+        block["sidecar_first"] = False
 
     data["providers"] = block
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
