@@ -1,0 +1,26 @@
+name: Lumen Local engine checks
+
+on:
+  push:
+    branches:
+      - feature/local-qwen-engine
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  local-engine-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile Python sources
+        run: python -m compileall -q core providers tests main.py ui.py
+      - name: Test engine-switch command parsing
+        run: python -m unittest discover -s tests -p "test_engine_switch.py" -v
+      - name: Test built-in local profile
+        run: python -m unittest discover -s tests -p "test_local_profile.py" -v
