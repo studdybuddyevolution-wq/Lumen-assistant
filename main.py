@@ -927,6 +927,32 @@ class JarvisLive:
         return (url, key, f"{url}/auto-login?key={key}", manual,
                 getattr(self._dashboard, "_bind_error", "") or "")
 
+    async def _wait_for_output_tail(self, timeout: float = 10.0) -> None:
+        """Let the active speaker finish before tearing its session down."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._speaking_lock:
+                speaking = self._is_speaking
+            if not speaking and not self._tail_active():
+                return
+            await asyncio.sleep(0.05)
+
+    async def _announce_pipeline(self, text: str) -> None:
+        """Speak and drain a pipeline acknowledgement before requesting reconnect."""
+        if self._engine is None:
+            self.ui.write_log("SYS: " + text)
+            return
+        event = self._turn_done_event
+        if event is not None:
+            event.clear()
+        await self._engine.announce(text)
+        if event is not None:
+            try:
+                await asyncio.wait_for(event.wait(), timeout=10.0)
+            except asyncio.TimeoutError:
+                self.ui.write_log("SYS: Speech acknowledgement timed out; continuing the engine switch.")
+        await self._wait_for_output_tail()
+
     async def _announce_live(self, text: str) -> None:
         """Ask the active Gemini voice to confirm a typed mode change."""
         if not self.session:
@@ -949,6 +975,7 @@ class JarvisLive:
                 await asyncio.wait_for(event.wait(), timeout=6.0)
         except Exception as e:
             self.ui.write_log(f"SYS: Could not speak the engine status: {str(e)[:120]}")
+        await self._wait_for_output_tail()
 
     async def _switch_engine(self, target: str, *, announce: bool = True,
                              source: str = "command") -> bool:
@@ -969,7 +996,7 @@ class JarvisLive:
                 "Lumen is already using Gemini Live."
             )
             if announce and self._engine is not None:
-                await self._engine.announce(message)
+                await self._announce_pipeline(message)
             elif announce and self.session and current == PROVIDER_MODE_GEMINI:
                 await self._announce_live(message)
             else:
@@ -983,7 +1010,7 @@ class JarvisLive:
                 message = "I cannot switch to the local engine yet. " + detail
                 self.ui.write_log("ERR: " + message)
                 if announce and self._engine is not None:
-                    await self._engine.announce(message)
+                    await self._announce_pipeline(message)
                 elif announce and self.session and current == PROVIDER_MODE_GEMINI:
                     await self._announce_live(message)
                 return False
@@ -1000,7 +1027,7 @@ class JarvisLive:
                 )
                 self.ui.write_log("ERR: " + message)
                 if announce and self._engine is not None:
-                    await self._engine.announce(message)
+                    await self._announce_pipeline(message)
                 return False
             message = "Switching back to Gemini Live now."
 
@@ -1009,11 +1036,15 @@ class JarvisLive:
         # never leaves a half-configured mode behind.
         if announce:
             if self._engine is not None:
-                await self._engine.announce(message)
+                await self._announce_pipeline(message)
             elif self.session and current == PROVIDER_MODE_GEMINI:
                 await self._announce_live(message)
             else:
                 self.ui.write_log("SYS: " + message)
+        else:
+            # Gemini already generated its reply to the spoken switch phrase.
+            # Let that audio finish before the socket is replaced.
+            await self._wait_for_output_tail()
 
         save_provider_mode(target)
         try:
