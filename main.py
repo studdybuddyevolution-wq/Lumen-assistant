@@ -1828,6 +1828,18 @@ class JarvisLive:
                                     }))
                             out_buf = []
 
+                            # Wait for the engine to finish its spoken
+                            # acknowledgement of the switch tool result.
+                            # This point is reached on the FOLLOW-UP turn_end,
+                            # not the turn_complete bundled with the tool call.
+                            if self._pending_engine_switch:
+                                self._pending_engine_switch = False
+                                self.request_reconnect(
+                                    keep_context=False,
+                                    reason="conversation engine switch",
+                                )
+                                return
+
                             if self._vision_close_pending:
                                 # This turn_complete IS the vision answer — close camera + release busy flag
                                 self._vision_close_pending = False
@@ -1846,15 +1858,8 @@ class JarvisLive:
                         await self.session.send_tool_response(
                             function_responses=fn_responses
                         )
-                        # Let the active engine receive the tool result before
-                        # unwinding its session. The next session is built from
-                        # the newly saved provider configuration.
-                        if self._pending_engine_switch:
-                            self._pending_engine_switch = False
-                            await asyncio.sleep(0.8)
-                            self.request_reconnect(
-                                keep_context=False, reason="conversation engine switch"
-                            )
+                        # The follow-up answer is allowed to finish. The
+                        # reconnect happens at the next turn_complete above.
                         await self._flush_pending_vision()
         except Exception as e:
             print(f"[JARVIS] ❌ Recv: {e}")
