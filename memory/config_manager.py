@@ -446,6 +446,11 @@ def get_sidecar_provider() -> str:
 def _patch_providers(**fields) -> None:
     p = get_providers()
     p.update(fields)
+    if p.get("local_only"):
+        # Local-only is a privacy boundary, not just a UI preference. A later
+        # sidecar setting must not quietly send model requests to a hosted API.
+        p["sidecar"] = ""
+        p["sidecar_first"] = False
     _patch_config(providers=p)
 
 
@@ -558,6 +563,11 @@ def save_providers(mode: str = None, pipeline: dict = None, creds: dict = None,
         block["sidecar"] = str(sidecar or "").strip()
     if sidecar_first is not None:
         block["sidecar_first"] = bool(sidecar_first)
+
+    if block.get("local_only"):
+        # The complete local engine never uses a remote model sidecar.
+        block["sidecar"] = ""
+        block["sidecar_first"] = False
 
     data["providers"] = block
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
