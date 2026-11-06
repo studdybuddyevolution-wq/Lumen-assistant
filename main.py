@@ -64,6 +64,7 @@ from memory.memory_manager import (
 # system_status).
 from core import outcome
 from core.action_loader import strip_meta
+from core.engine_switch import parse_engine_switch
 from actions.screen_processor  import _capture_camera, _capture_screen
 from actions.system_monitor    import SystemMonitor, get_system_status
 from actions.proactive         import ProactiveEngine
@@ -926,8 +927,125 @@ class JarvisLive:
         return (url, key, f"{url}/auto-login?key={key}", manual,
                 getattr(self._dashboard, "_bind_error", "") or "")
 
+    async def _announce_live(self, text: str) -> None:
+        """Ask the active Gemini voice to confirm a typed mode change."""
+        if not self.session:
+            self.ui.write_log("SYS: " + text)
+            return
+        event = self._turn_done_event
+        if event is not None:
+            event.clear()
+        try:
+            await self.session.send_client_content(
+                turns={"role": "user", "parts": [{
+                    "text": (
+                        "Give the user this brief status update in one natural sentence. "
+                        "Do not add instructions or extra detail: " + text
+                    )
+                }]},
+                turn_complete=True,
+            )
+            if event is not None:
+                await asyncio.wait_for(event.wait(), timeout=6.0)
+        except Exception as e:
+            self.ui.write_log(f"SYS: Could not speak the engine status: {str(e)[:120]}")
+
+    async def _switch_engine(self, target: str, *, announce: bool = True,
+                             source: str = "command") -> bool:
+        """Validate and switch the conversation engine without a cloud fallback."""
+        from memory.config_manager import (
+            PROVIDER_MODE_GEMINI, PROVIDER_MODE_LOCAL, get_provider_mode,
+            save_provider_mode,
+        )
+
+        target = str(target or "").strip().lower()
+        if target not in (PROVIDER_MODE_LOCAL, PROVIDER_MODE_GEMINI):
+            return False
+        current = get_provider_mode()
+        if target == current:
+            message = (
+                "Lumen is already using the local Qwen 3.5 4B engine."
+                if target == PROVIDER_MODE_LOCAL else
+                "Lumen is already using Gemini Live."
+            )
+            if announce and self._engine is not None:
+                await self._engine.announce(message)
+            elif announce and self.session and current == PROVIDER_MODE_GEMINI:
+                await self._announce_live(message)
+            else:
+                self.ui.write_log("SYS: " + message)
+            return True
+
+        if target == PROVIDER_MODE_LOCAL:
+            from providers.local_profile import validate_local_profile
+            ok, detail = await asyncio.to_thread(validate_local_profile)
+            if not ok:
+                message = "I cannot switch to the local engine yet. " + detail
+                self.ui.write_log("ERR: " + message)
+                if announce and self._engine is not None:
+                    await self._engine.announce(message)
+                elif announce and self.session and current == PROVIDER_MODE_GEMINI:
+                    await self._announce_live(message)
+                return False
+            message = (
+                "Switching to the fully local Lumen engine now: local Whisper, "
+                "Qwen 3.5 4B on Ollama, and Piper speech. No Gemini model calls "
+                "will be used while local mode is active."
+            )
+        else:
+            if not _get_api_key():
+                message = (
+                    "Gemini Live is not configured. Add your Gemini API key in "
+                    "settings before switching back. Lumen will stay on the local engine."
+                )
+                self.ui.write_log("ERR: " + message)
+                if announce and self._engine is not None:
+                    await self._engine.announce(message)
+                return False
+            message = "Switching back to Gemini Live now."
+
+        # Speak through the engine that is still active. The new mode is saved
+        # only after validation and the acknowledgement, so a failed switch
+        # never leaves a half-configured mode behind.
+        if announce:
+            if self._engine is not None:
+                await self._engine.announce(message)
+            elif self.session and current == PROVIDER_MODE_GEMINI:
+                await self._announce_live(message)
+            else:
+                self.ui.write_log("SYS: " + message)
+
+        save_provider_mode(target)
+        try:
+            from providers import registry
+            registry.reset()
+        except Exception:
+            pass
+        self.ui.write_log("SYS: " + message)
+        self.request_reconnect(
+            keep_context=False,
+            reason=f"switch to {'local Qwen' if target == PROVIDER_MODE_LOCAL else 'Gemini Live'}",
+        )
+        return True
+
+    async def _handle_pipeline_engine_command(self, text: str) -> bool:
+        target = parse_engine_switch(text)
+        if target is None:
+            return False
+        await self._switch_engine(target, announce=True, source="voice")
+        return True
+
     def _on_text_command(self, text: str):
-        if not self._loop or not self.session:
+        if not self._loop:
+            return
+        target = parse_engine_switch(text)
+        if target is not None:
+            asyncio.run_coroutine_threadsafe(
+                self._switch_engine(target, announce=True, source="typed"),
+                self._loop,
+            )
+            return
+        if not self.session:
             return
         # Respect wake-word sleep: a typed command must not be answered while
         # asleep either (the sleep gate is not just for the mic). Wake first with
@@ -1728,6 +1846,15 @@ class JarvisLive:
                                     }))
                             in_buf = []
 
+                            # Gemini Live has completed this spoken turn. Only
+                            # an explicit whole-utterance command changes mode.
+                            if full_in and self._engine_mode() == "gemini":
+                                _switch_target = parse_engine_switch(full_in)
+                                if _switch_target is not None:
+                                    await self._switch_engine(
+                                        _switch_target, announce=False, source="voice"
+                                    )
+
                             full_out = " ".join(out_buf).strip()
                             # Second line of defence: even if a repeat slips
                             # into a *fresh* buffer after a flush, never log the
@@ -2243,45 +2370,52 @@ class JarvisLive:
             return "gemini"
 
     def _resolve_engine_caps(self):
-        """What the chosen engine can do — or None for Gemini Live.
+        """Resolve capabilities for Gemini Live, a custom pipeline, or Lumen Local.
 
-        Called BEFORE `_build_config()`, because the tool declarations depend on
-        the answer. Building the providers here rather than later is deliberate:
-        the registry caches them by configuration, so the objects made now are
-        the same ones the engine gets a moment later, and a misconfiguration is
-        reported while there is still a Gemini session to fall back to.
+        Local-profile errors are returned as an explicit sentinel. They must not
+        silently fall back to Gemini, because that would violate the user's choice.
+        The older custom pipeline retains its existing Gemini fallback behavior.
         """
-        if self._engine_mode() != "pipeline":
+        mode = self._engine_mode()
+        if mode == "gemini":
             return None
-        try:
-            from memory.config_manager import get_pipeline, get_provider_config
-            from providers import registry
 
-            pipe = get_pipeline()
+        try:
+            from providers import registry
+            from memory.config_manager import (
+                get_pipeline, get_provider_config, save_provider_config,
+            )
+
+            if mode == "local":
+                from providers.local_profile import get_profile, validate_local_profile
+                ok, detail = validate_local_profile()
+                if not ok:
+                    return {"_local_unavailable": detail}
+                pipe, configs = get_profile()
+                config_for = lambda pid: dict(configs.get(pid) or {})
+            else:
+                pipe = get_pipeline()
+                config_for = get_provider_config
+
             llm_id = str(pipe.get("llm") or "").strip()
             if not llm_id:
                 raise RuntimeError("no language model is chosen")
-            missing = registry.missing_fields(llm_id, get_provider_config(llm_id))
+            llm_cfg = config_for(llm_id)
+            missing = registry.missing_fields(llm_id, llm_cfg)
             if missing:
                 raise RuntimeError(f"{llm_id} needs: {', '.join(missing)}")
-            llm = registry.build(llm_id, get_provider_config(llm_id))
+            llm = registry.build(llm_id, llm_cfg)
 
-            # Ask the model whether it can see, once, and remember the answer.
-            #
-            # This decides whether `screen_process` is declared at all, so it
-            # has to be settled BEFORE the config is built. Leaving it to the
-            # panel's TEST button meant that anybody who never pressed it ran a
-            # vision model with its eyes switched off — silently, and for every
-            # session. Measured once per model, in about a second, then read
-            # from the settings for ever after.
-            from memory.config_manager import save_provider_config
+            # The Qwen profile records its known vision capability with its model
+            # tag; custom pipelines retain the existing one-time vision probe.
             ensure = getattr(llm, "ensure_vision_known", None)
             if ensure is not None:
                 try:
                     seen = ensure(lambda v, _id=llm_id: save_provider_config(_id, v))
                     self.ui.write_log(
-                        f"SYS: {llm_id} "
-                        + ("can see images." if seen else "is text only."))
+                        f"SYS: {llm_id} " +
+                        ("can see images." if seen else "is text only.")
+                    )
                 except Exception as e:
                     print(f"[JARVIS] vision check skipped: {e}")
 
@@ -2289,24 +2423,19 @@ class JarvisLive:
             caps["audio_out"] = bool(str(pipe.get("tts") or "").strip())
             return caps
         except Exception as e:
-            # A local engine that will not start must never mean no assistant.
-            # Falling back to Live is the whole reason the ladder exists, and
-            # the reason is said out loud rather than left in a console.
-            self.ui.write_log(f"SYS: local engine unavailable ({e}) — "
-                              f"using Gemini Live.")
+            if mode == "local":
+                return {"_local_unavailable": str(e)}
+            self.ui.write_log(
+                f"SYS: custom local pipeline unavailable ({e}) — using Gemini Live."
+            )
             print(f"[JARVIS] Pipeline engine unavailable: {e}")
             return None
 
     @asynccontextmanager
     async def _open_session(self, live_model: str, config):
-        """The conversation, from whichever engine is configured.
-
-        Both branches yield an object with the same four methods and the same
-        event shapes, which is the entire contract — see providers/base.py. The
-        Live branch is unchanged from what it has always been, down to the
-        client being rebuilt on every reconnect.
-        """
-        if self._engine_caps is None:
+        """Open the selected engine behind the shared Live-shaped interface."""
+        mode = self._engine_mode()
+        if mode == "gemini":
             client = genai.Client(
                 api_key=_get_api_key(),
                 http_options={"api_version":
@@ -2321,25 +2450,28 @@ class JarvisLive:
         from providers import registry
         from providers.engine_pipeline import PipelineEngine
 
-        pipe = get_pipeline()
+        if mode == "local":
+            from providers.local_profile import get_profile
+            pipe, configs = get_profile()
+            config_for = lambda pid: dict(configs.get(pid) or {})
+        else:
+            pipe = get_pipeline()
+            config_for = get_provider_config
 
         def part(slot):
             pid = str(pipe.get(slot) or "").strip()
             if not pid:
                 return None
-            # `log` so a provider can say what it is doing — downloading a
-            # voice, loading a model — in the activity log rather than only on a
-            # console the user may not be watching.
-            cfg = dict(get_provider_config(pid))
+            cfg = config_for(pid)
             cfg["log"] = self.ui.write_log
             return registry.build(pid, cfg)
 
-        engine = PipelineEngine(part("llm"), part("stt"), part("tts"),
-                                config=config, log=self.ui.write_log)
-        # Without push-to-talk nothing else knows when a sentence ended, so the
-        # engine finds it in the audio. With push-to-talk the key release is the
-        # signal and the detector stays out of the way.
+        engine = PipelineEngine(
+            part("llm"), part("stt"), part("tts"),
+            config=config, log=self.ui.write_log,
+        )
         engine.auto_turn = not self._ptt_enabled
+        engine.command_handler = self._handle_pipeline_engine_command
         self._engine = engine
         try:
             yield engine
@@ -2391,17 +2523,39 @@ class JarvisLive:
                 # off a quota limit is skipped; the name is published back to
                 # LIVE_MODEL so plugins follow whatever is actually in use.
                 global LIVE_MODEL
-                LIVE_MODEL = _gemini.live_model()
+                _mode = self._engine_mode()
+                if _mode == "gemini":
+                    LIVE_MODEL = _gemini.live_model()
+                elif _mode == "local":
+                    LIVE_MODEL = "local/qwen3.5:4b"
+                else:
+                    LIVE_MODEL = "local/custom-pipeline"
                 live_model = LIVE_MODEL
-                print(f"[JARVIS] Live model: {live_model}")
+                print(f"[JARVIS] Conversation engine: {_mode} ({live_model})")
 
                 _resumed_with = self._resume_handle is not None
 
-                # Decided BEFORE the config is built, because the tool
-                # declarations depend on what the engine can serve. On a default
-                # install this returns None in a few microseconds and nothing
-                # below behaves any differently.
+                # Resolve capabilities BEFORE building the prompt/tool declarations.
                 self._engine_caps = self._resolve_engine_caps()
+                if isinstance(self._engine_caps, dict) and self._engine_caps.get("_local_unavailable"):
+                    _reason = str(self._engine_caps["_local_unavailable"])
+                    self.ui.write_log(
+                        "ERR: Local engine is selected but is not ready. " + _reason +
+                        " Install/fix it, then press SAVE & APPLY in ENGINE & PROVIDERS. "
+                        "Lumen will not fall back to Gemini."
+                    )
+                    self.ui.set_state("SLEEPING")
+                    # Wait for an explicit settings change. Re-applying Local
+                    # retries after the user installs the missing dependencies.
+                    if self._engine_mode() != "local":
+                        continue
+                    self._reconnect_event.clear()
+                    if self._engine_mode() != "local":
+                        continue
+                    await self._reconnect_event.wait()
+                    self._reconnect_event.clear()
+                    continue
+
                 config = self._build_config()
 
                 # The conversation itself. `_open_session` gives back a Gemini
