@@ -162,6 +162,7 @@ class PipelineEngine:
         # Turn detection state. `auto_turn` is off unless something switches it
         # on, so push-to-talk keeps behaving exactly as it does today.
         self.auto_turn = False
+        self.command_handler = None  # optional async callback for explicit engine-switch commands
         self._on_turn_end = None          # set by main.py: what to do on a flush
         self._vad_floor = _VAD_ABSOLUTE_MIN
         self._vad_speech_ms = 0.0
@@ -381,6 +382,14 @@ class PipelineEngine:
         if self._gen and not self._gen.done():
             self._gen.cancel()
         await self._queue.put(None)
+
+    async def announce(self, text: str) -> None:
+        """Speak a brief engine-status message through the currently active pipeline."""
+        if self._closed or not str(text or "").strip():
+            return
+        await self._emit(Msg.said(str(text).strip()))
+        await self._speak(str(text).strip())
+        await self._emit(Msg.turn_end())
 
     async def warmup(self) -> None:
         """Get every part ready before the user speaks.
@@ -781,6 +790,18 @@ class PipelineEngine:
             # It also clears main.py's stall watchdog immediately, so a local
             # model taking its time never looks like a dead connection.
             await self._emit(Msg.heard(text))
+            # An explicit engine switch must be intercepted before this utterance
+            # is sent to the current LLM. Ordinary speech follows the normal path.
+            if self.command_handler is not None:
+                try:
+                    handled = await self.command_handler(text)
+                    if handled:
+                        return text
+                except Exception as e:
+                    self._log(
+                        "SYS: engine-switch command handler failed: "
+                        f"{type(e).__name__}: {str(e)[:140]}"
+                    )
             await self.send_client_content(
                 turns={"role": "user", "parts": [{"text": text}]})
         return text

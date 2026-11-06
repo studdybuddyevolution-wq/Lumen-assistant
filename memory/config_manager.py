@@ -394,7 +394,8 @@ def save_plugin_enabled(plugin_name: str, enabled: bool) -> None:
 # package — so an ordinary install never executes a line of it. This is the
 # whole basis of the claim that the folder costs nothing when unused.
 PROVIDER_MODE_GEMINI = "gemini"      # the conversation runs on the Live API
-PROVIDER_MODE_PIPELINE = "pipeline"  # STT -> LLM -> TTS, assembled from providers
+PROVIDER_MODE_PIPELINE = "pipeline"  # user-assembled STT -> LLM -> TTS
+PROVIDER_MODE_LOCAL = "local"          # Lumen profile: local Whisper -> Qwen -> Piper
 
 
 def get_providers() -> dict:
@@ -406,7 +407,7 @@ def get_providers() -> dict:
 def get_provider_mode() -> str:
     """Which engine holds the conversation. Defaults to Gemini Live."""
     mode = str(get_providers().get("mode", "") or "").strip().lower()
-    return mode if mode in (PROVIDER_MODE_GEMINI, PROVIDER_MODE_PIPELINE) \
+    return mode if mode in (PROVIDER_MODE_GEMINI, PROVIDER_MODE_PIPELINE, PROVIDER_MODE_LOCAL) \
         else PROVIDER_MODE_GEMINI
 
 
@@ -447,7 +448,8 @@ def _patch_providers(**fields) -> None:
 def save_provider_mode(mode: str) -> None:
     mode = (mode or "").strip().lower()
     _patch_providers(mode=mode if mode in (PROVIDER_MODE_GEMINI,
-                                           PROVIDER_MODE_PIPELINE)
+                                           PROVIDER_MODE_PIPELINE,
+                                           PROVIDER_MODE_LOCAL)
                      else PROVIDER_MODE_GEMINI)
 
 
@@ -528,7 +530,8 @@ def save_providers(mode: str = None, pipeline: dict = None, creds: dict = None,
     if mode is not None:
         m = str(mode).strip().lower()
         block["mode"] = m if m in (PROVIDER_MODE_GEMINI,
-                                   PROVIDER_MODE_PIPELINE) else PROVIDER_MODE_GEMINI
+                                   PROVIDER_MODE_PIPELINE,
+                                   PROVIDER_MODE_LOCAL) else PROVIDER_MODE_GEMINI
     if pipeline is not None:
         current = block.get("pipeline")
         current = dict(current) if isinstance(current, dict) else {}
