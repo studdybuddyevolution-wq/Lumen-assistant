@@ -11,13 +11,15 @@ from __future__ import annotations
 _REQUIRED_SLOTS = ("llm", "stt", "tts")
 
 
-def validate_local_pipeline(registry, pipeline: dict, get_provider_config) -> None:
-    """Raise ValueError unless LLM, STT and TTS are explicitly local and ready.
+def validate_local_pipeline(registry, pipeline: dict, get_provider_config,
+                            *, probe: bool = True) -> None:
+    """Raise ValueError unless LLM, STT and TTS are explicitly local.
 
     The provider catalog's local flag is authoritative. A custom or unknown
-    endpoint is not assumed local merely because its name sounds local. Readiness
-    probes are performed before changing modes, so a failed preflight leaves the
-    current engine untouched.
+    endpoint is not assumed local merely because its name sounds local. When
+    probe=True, actual readiness probes run before a requested mode change so a
+    failed preflight leaves the current engine untouched. Session construction
+    uses probe=False to re-check the privacy boundary without an extra model call.
     """
     pipeline = pipeline if isinstance(pipeline, dict) else {}
 
@@ -72,6 +74,9 @@ def validate_local_pipeline(registry, pipeline: dict, get_provider_config) -> No
                 "Speech recognition is configured for a hosted API, not local Whisper."
             )
 
+        if not probe:
+            continue
+
         # Probes are intentionally side-effect-light. The LLM probe checks
         # reachability and model availability without running the vision probe;
         # Whisper checks its local package; system TTS checks the local voice.
@@ -81,12 +86,12 @@ def validate_local_pipeline(registry, pipeline: dict, get_provider_config) -> No
             continue
 
         instance = registry.build(provider_id, cfg)
-        probe = getattr(instance, "probe", None)
-        if callable(probe):
+        readiness_probe = getattr(instance, "probe", None)
+        if callable(readiness_probe):
             if slot == "llm":
-                ok, detail = probe(check_vision=False)
+                ok, detail = readiness_probe(check_vision=False)
             else:
-                ok, detail = probe()
+                ok, detail = readiness_probe()
             if not ok:
                 raise ValueError(
                     f"{declaration.get('label', provider_id)} is not ready: {detail}"
