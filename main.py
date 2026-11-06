@@ -2349,10 +2349,23 @@ class JarvisLive:
         if self._engine_mode() != "pipeline":
             return None
         try:
-            from memory.config_manager import get_pipeline, get_provider_config
+            from memory.config_manager import (
+                get_pipeline, get_provider_config, get_local_only,
+                get_sidecar_provider,
+            )
             from providers import registry
 
             pipe = get_pipeline()
+            if get_local_only():
+                from core.engine_switch import validate_local_pipeline
+                validate_local_pipeline(
+                    registry, pipe, get_provider_config, probe=False
+                )
+                if get_sidecar_provider():
+                    raise RuntimeError(
+                        "local-only mode cannot have a cloud model sidecar"
+                    )
+
             llm_id = str(pipe.get("llm") or "").strip()
             if not llm_id:
                 raise RuntimeError("no language model is chosen")
